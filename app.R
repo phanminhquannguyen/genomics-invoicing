@@ -4,9 +4,13 @@ library(tidyr)
 library(DT)
 library(shinyjs)
 
-# Parse data
+# Parse data when update
 parse_data <- function(df) {
-  df <- df %>% replace_na(replace = as.list(rep(0, ncol(df))))
+  # Replace NA in specific column only
+  target_col <- "Additional reagent Cost (not incl. in kit)"
+  if (target_col %in% names(df)) {
+    df[[target_col]][is.na(df[[target_col]])] <- 0
+  }
   return(df)
 }
 
@@ -15,7 +19,7 @@ ui <- fluidPage(
   tags$head(
     tags$link(rel = "stylesheet", type = "text/css", href = "style.css")
   ),
-  useShinyjs(), 
+  useShinyjs(),
   uiOutput("main_ui")
 )
 
@@ -55,15 +59,53 @@ server <- function(input, output, session) {
   # Navigate to invoice creation page
   observeEvent(input$create_invoice_page, {
     current_page("create_invoice")
+    # Initial rendering of radio buttons
+    output$invoice_type_ui <- renderUI({
+      radioButtons("invoice_type", "Select Invoice Type:",
+                   choices = c("Internal", "External"),
+                   selected = "Internal",
+                   inline = TRUE)
+    })
   })
   
-  # Handle row selection in the data table
+  # Observe the selection in the data table
   observeEvent(input$data_table_rows_selected, {
     selected_rows <- input$data_table_rows_selected
-    if (!is.null(processed_data()) && length(selected_rows) > 0) {
-      invoice_items(processed_data()[selected_rows, ])
+    df <- processed_data()
+    
+    # Check if rows are selected
+    if (!is.null(df) && length(selected_rows) > 0) {
+      selected_df <- df[selected_rows, ]
+      
+      # Determine price column based on initial selection (if available)
+      price_col <- if (!is.null(input$invoice_type) && input$invoice_type == "Internal") "%PRJ Price" else "%EXTERNAL Price"
+      
+      # Ensure the price column exists
+      if (price_col %in% names(selected_df)) {
+        invoice_df <- selected_df[, c("Product Code", "Brand", "Product Category", "Product Name", price_col)]
+        names(invoice_df)[names(invoice_df) == price_col] <- "Selected Price"
+        invoice_items(invoice_df)
+      } else {
+        showNotification("Selected price column not found.", type = "error")
+        invoice_items(NULL)
+      }
     } else {
       invoice_items(NULL)
+    }
+  })
+  
+  # Observe invoice type changes and update the price
+  observeEvent(input$invoice_type, {
+    selected_rows <- input$data_table_rows_selected
+    df <- processed_data()
+    if (!is.null(df) && length(selected_rows) > 0) {
+      selected_df <- df[selected_rows, ]
+      price_col <- if (input$invoice_type == "Internal") "%PRJ Price" else "%EXTERNAL Price"
+      if (price_col %in% names(selected_df)) {
+        invoice_df <- selected_df[, c("Product Code", "Brand", "Product Category", "Product Name", price_col)]
+        names(invoice_df)[names(invoice_df) == price_col] <- "Selected Price"
+        invoice_items(invoice_df)
+      }
     }
   })
   
@@ -108,6 +150,10 @@ server <- function(input, output, session) {
         div(class = "content",
             div(class = "center-container",
                 h2("Select Items for Invoice"),
+                
+                # 🟡 ADD RADIO BUTTONS HERE
+                uiOutput("invoice_type_ui"),
+                
                 DT::dataTableOutput("selected_items_table"),
                 br(),
                 actionButton("back_to_main", "Back to Main", class = "back-button"),
@@ -124,22 +170,33 @@ server <- function(input, output, session) {
     actionButton("create_invoice_page", "Create Invoice", class = "invoice-button")
   })
   
-  # Render the interactive data table for item selection
+  # Render the interactive data table for item selection for the invoice
   output$data_table <- DT::renderDataTable({
     req(processed_data())
-    processed_data()
+    datatable(processed_data(),
+              rownames = FALSE,
+              options = list(
+                ordering = FALSE,
+                language = list(
+                  search = "Search Item:"
+                )
+              ))
   }, selection = "multiple")
   
   # Render the table of selected items for the invoice
   output$selected_items_table <- DT::renderDataTable({
     req(invoice_items())
-    invoice_items()
+    datatable(invoice_items(),
+              rownames = FALSE,
+              options = list(
+                ordering = FALSE # Add this line to disable sorting
+              ))
   })
   
-  # Observe event for generating the final invoice 
+  # Observe event for generating the final invoice
   observeEvent(input$generate_invoice, {
     req(invoice_items())
-
+    
     # navigating to a "invoice generated" page or triggering a download.
     showNotification("Invoice generated (logic to be implemented)", type = "message")
   })
